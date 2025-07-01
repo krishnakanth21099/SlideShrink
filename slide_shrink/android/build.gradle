@@ -1,0 +1,39 @@
+buildscript {
+    ext.kotlin_version = '1.9.0'  // Updated Kotlin version for better compatibility
+    repositories {
+        google()
+        mavenCentral()
+        maven { url 'https://maven.ffmpeg.org/artifactory/release' }  // Add FFmpeg Kit repository
+    }
+
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    
+    configurations.all {
+        resolutionStrategy {
+            // Force specific versions if needed
+            force 'androidx.core:core-ktx:1.12.0'
+            force 'androidx.appcompat:appcompat:1.6.1'
+        }
+    }
+}
+
+rootProject.buildDir = '../build'
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(':app')
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
