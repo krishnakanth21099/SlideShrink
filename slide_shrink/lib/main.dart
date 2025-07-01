@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_compress/video_compress.dart';
+import 'package:gallery_saver_plus/gallery_saver.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 void main() {
   runApp(VideoCompressorApp());
@@ -30,6 +32,7 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
   double? originalSize;
   double? compressedSize;
   VideoPlayerController? controller;
+  Duration? compressionDuration; // To store the time taken for compression
 
   bool isCompressing = false;
 
@@ -45,6 +48,10 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
         outputPath = null;
         originalSize = File(inputPath!).lengthSync() / (1024 * 1024);
         compressedSize = null;
+        compressionDuration = null; // Reset duration
+        // Dispose previous controller if a new video is picked
+        controller?.dispose();
+        controller = null;
       });
     }
   }
@@ -54,7 +61,10 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
 
     setState(() {
       isCompressing = true;
+      compressionDuration = null; // Clear previous duration
     });
+
+    final stopwatch = Stopwatch()..start(); // Start the timer
 
     try {
       final MediaInfo? mediaInfo = await VideoCompress.compressVideo(
@@ -62,13 +72,16 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
         quality: _selectedQuality,
         deleteOrigin: false,
         includeAudio: true,
-        frameRate: _targetFrameRate, // Apply the custom frame rate
+        frameRate: _targetFrameRate,
       );
+
+      stopwatch.stop(); // Stop the timer
 
       if (mediaInfo != null && mediaInfo.file != null) {
         setState(() {
           outputPath = mediaInfo.file!.path;
           compressedSize = mediaInfo.file!.lengthSync() / (1024 * 1024);
+          compressionDuration = stopwatch.elapsed; // Store elapsed time
           isCompressing = false;
         });
         playVideo();
@@ -79,6 +92,7 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Compression Failed')));
       }
     } catch (e) {
+      stopwatch.stop(); // Ensure stopwatch stops even on error
       setState(() {
         isCompressing = false;
       });
@@ -88,11 +102,56 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
 
   void playVideo() {
     if (outputPath != null) {
+      controller?.dispose();
       controller = VideoPlayerController.file(File(outputPath!))
         ..initialize().then((_) {
           setState(() {});
           controller!.play();
         });
+    }
+  }
+
+  Future<void> _saveVideoToGallery() async {
+    if (outputPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No compressed video to save.')));
+      return;
+    }
+
+    // Request storage permission
+    // For Android 10 (API 29) and above, WRITE_EXTERNAL_STORAGE is deprecated.
+    // gallery_saver_plus uses MediaStore for newer Android versions.
+    // For older Android versions, or if you need broader access, Permission.storage is still relevant.
+    // For iOS, NSPhotoLibraryAddUsageDescription and NSPhotoLibraryUsageDescription are needed in Info.plist.
+    PermissionStatus status = await Permission.photos.request(); // Request photos permission for modern Android/iOS
+
+    if (status.isGranted) {
+      try {
+        bool? success = await GallerySaver.saveVideo(outputPath!, albumName: "Compressed Videos");
+        if (success == true) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Video saved to gallery!')));
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save video to gallery.')));
+        }
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error saving video: $e')));
+      }
+    } else if (status.isDenied) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Permission denied. Please grant access to save video.')));
+    } else if (status.isPermanentlyDenied) {
+      // User has permanently denied, guide them to app settings
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Storage permission permanently denied. Please enable it in app settings.'),
+          action: SnackBarAction(
+            label: 'Settings',
+            onPressed: () {
+              openAppSettings(); // Opens app settings for the user
+            },
+          ),
+        ),
+      );
+    } else if (status.isRestricted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Storage permission restricted.')));
     }
   }
 
@@ -107,9 +166,10 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text('Video Compressor')),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             ElevatedButton(
               onPressed: pickVideo,
@@ -139,9 +199,9 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
               Text('Target Frame Rate: $_targetFrameRate FPS'),
               Slider(
                 value: _targetFrameRate.toDouble(),
-                min: 10, // Minimum frame rate
-                max: 30, // Maximum frame rate
-                divisions: 20, // Number of divisions between min and max
+                min: 10,
+                max: 30,
+                divisions: 20,
                 label: _targetFrameRate.round().toString(),
                 onChanged: (double value) {
                   setState(() {
@@ -162,6 +222,8 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
             if (outputPath != null && !isCompressing) ...[
               SizedBox(height: 10),
               Text('Compressed Size: ${compressedSize?.toStringAsFixed(2)} MB'),
+              if (compressionDuration != null) // Display compression time
+                Text('Compression Time: ${compressionDuration!.inSeconds} seconds'),
               ElevatedButton(
                 onPressed: playVideo,
                 child: Text('Preview Compressed Video'),
@@ -170,6 +232,11 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
                 AspectRatio(
                   aspectRatio: controller!.value.aspectRatio,
                   child: VideoPlayer(controller!),
+                ),
+                SizedBox(height: 10),
+                ElevatedButton(
+                  onPressed: _saveVideoToGallery,
+                  child: Text('Save Video to Gallery'),
                 ),
               ]
             ]
