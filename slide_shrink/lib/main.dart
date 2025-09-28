@@ -4,8 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_compress/video_compress.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:flutter_vlc_player/flutter_vlc_player.dart';
 import 'package:image_gallery_saver/image_gallery_saver.dart';
 import 'package:permission_handler/permission_handler.dart';
+
 
 void main() {
   runApp(VideoCompressorApp());
@@ -32,9 +36,14 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
   double? originalSize;
   double? compressedSize;
   VideoPlayerController? controller;
-  Duration? compressionDuration; // To store the time taken for compression
+  Duration? compressionDuration;
+  VlcPlayerController? vlcController;
 
   bool isCompressing = false;
+  bool isUploading = false;
+  String? uploadedVideoId;
+  String? hlsUrl;
+  String? videoUrl;
 
   // Compression Settings - Customize here
   VideoQuality _selectedQuality =
@@ -87,6 +96,7 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
           isCompressing = false;
         });
         playVideo();
+        uploadVideo(); // Upload to server after compression
       } else {
         setState(() {
           isCompressing = false;
@@ -112,6 +122,88 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
           setState(() {});
           controller!.play();
         });
+    }
+  }
+
+  Future<void> uploadVideo() async {
+    if (outputPath == null) return;
+
+    setState(() {
+      isUploading = true;
+    });
+
+    try {
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('https://e2e-77-175.ssdcloudindia.net/dev/content/video_upload/'),
+      );
+
+      request.headers.addAll({
+        'Accept': 'application/json',
+      });
+
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          'video_file',
+          outputPath!,
+        ),
+      );
+
+      var response = await request.send();
+      var responseData = await response.stream.bytesToString();
+      var jsonResponse = json.decode(responseData);
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        setState(() {
+          uploadedVideoId = jsonResponse['id'];
+          hlsUrl = jsonResponse['hls_url'];
+          videoUrl = jsonResponse['file_url'];
+          isUploading = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Video uploaded successfully!')),
+        );
+
+        getVideoInfo(); // Get updated video info with HLS URL
+      } else {
+        setState(() {
+          isUploading = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Upload failed: ${response.statusCode}')),
+        );
+      }
+    } catch (e) {
+      setState(() {
+        isUploading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Upload error: $e')),
+      );
+    }
+  }
+
+  Future<void> getVideoInfo() async {
+    if (uploadedVideoId == null) return;
+
+    try {
+      var response = await http.get(
+        Uri.parse('https://e2e-77-175.ssdcloudindia.net/dev/content/videos/$uploadedVideoId/'),
+        headers: {
+          'Accept': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        var jsonResponse = json.decode(response.body);
+        setState(() {
+          hlsUrl = jsonResponse['hls_url'];
+          videoUrl = jsonResponse['file_url'];
+        });
+      }
+    } catch (e) {
+      print('Error getting video info: $e');
     }
   }
 
@@ -162,9 +254,68 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
     }
   }
 
+  void playHlsVideo() {
+    if (hlsUrl != null) {
+      // If controller already exists and video has ended, reset it
+      if (vlcController != null && vlcController!.value.isEnded) {
+        vlcController!.stop().then((_) {
+          vlcController!.setMediaFromNetwork(hlsUrl!);
+          vlcController!.play();
+        });
+      }
+      // If controller doesn't exist or needs to be recreated
+      else if (vlcController == null || !vlcController!.value.isInitialized) {
+        vlcController?.dispose();
+        vlcController = VlcPlayerController.network(
+          hlsUrl!,
+          hwAcc: HwAcc.full,
+          autoPlay: false,
+          options: VlcPlayerOptions(),
+        )..addListener(() {
+            setState(() {});
+            // Handle video end - enable replay
+            if (vlcController!.value.isEnded) {
+              setState(() {});
+            }
+          });
+        setState(() {});
+      } else {
+        // Controller exists and is ready, just play
+        vlcController!.play();
+      }
+    }
+  }
+
+  void togglePlayPause() {
+    if (vlcController == null) return;
+
+    // If video has ended, restart it
+    if (vlcController!.value.isEnded) {
+      vlcController!.stop().then((_) {
+        vlcController!.setMediaFromNetwork(hlsUrl!);
+        vlcController!.play();
+      });
+    }
+    // Otherwise, toggle play/pause normally
+    else if (vlcController!.value.isPlaying) {
+      vlcController!.pause();
+    } else {
+      vlcController!.play();
+    }
+  }
+
+  void seekTo(double value) {
+    final duration = vlcController?.value.duration;
+    if (duration != null) {
+      final seekPosition = Duration(milliseconds: (duration.inMilliseconds * value).round());
+      vlcController?.seekTo(seekPosition);
+    }
+  }
+
   @override
   void dispose() {
     controller?.dispose();
+    vlcController?.dispose();
     VideoCompress.dispose();
     super.dispose();
   }
@@ -221,81 +372,189 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
                 onPressed: isCompressing ? null : compressVideo,
                 child: Text('Compress Video'),
               ),
+              // ElevatedButton(
+              //   onPressed: _saveVideoToGallery,
+              //   child: Text('Save Video to Gallery'),
+              // ),
             ],
-            if (isCompressing) ...[
+            if (isUploading) ...[
               SizedBox(height: 10),
               CircularProgressIndicator(),
-              Text('Compressing...')
+              Text('Uploading to server...')
             ],
-            if (outputPath != null && !isCompressing) ...[
+            if (uploadedVideoId != null && !isUploading) ...[
               SizedBox(height: 10),
-              Text('Compressed Size: ${compressedSize?.toStringAsFixed(2)} MB'),
-              if (compressionDuration != null) // Display compression time
-                Text(
-                    'Compression Time: ${compressionDuration!.inSeconds} seconds'),
-              ElevatedButton(
-                onPressed: playVideo,
-                child: Text('Preview Compressed Video'),
-              ),
-              if (controller != null && controller!.value.isInitialized) ...[
-                GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      controller!.value.isPlaying
-                          ? controller!.pause()
-                          : controller!.play();
-                    });
-                  },
-                  child: AspectRatio(
-                    aspectRatio: controller!.value.aspectRatio,
+              Text('Video uploaded successfully!'),
+              Text('Video ID: $uploadedVideoId'),
+              if (hlsUrl != null) ...[
+                SizedBox(height: 10),
+                Text('HLS URL: $hlsUrl'),
+                ElevatedButton(
+                  onPressed: playHlsVideo,
+                  child: Text('Stream Video (HLS)'),
+                ),
+              ],
+              if (vlcController != null) ...[
+                SizedBox(height: 10),
+                // Container(
+                  // constraints: BoxConstraints(
+                  //   maxHeight: MediaQuery.of(context).size.height * 0.6, // Max 60% of screen height
+                  //   maxWidth: MediaQuery.of(context).size.width * 0.9,   // Max 90% of screen width
+                  // ),
+                AspectRatio(
+                    aspectRatio: vlcController!.value.aspectRatio,
                     child: Stack(
                       alignment: Alignment.center,
                       children: [
-                        VideoPlayer(controller!),
-                        if (!controller!.value.isPlaying)
-                          Container(
-                            decoration: BoxDecoration(
-                              color: Colors.black26,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              Icons.play_arrow,
-                              color: Colors.white,
-                              size: 50,
+                        VlcPlayer(
+                          controller: vlcController!,
+                          aspectRatio: vlcController!.value.aspectRatio,
+                          placeholder: Center(child: CircularProgressIndicator()),
+                        ),
+                        // Play/Pause overlay button
+                        GestureDetector(
+                          onTap: togglePlayPause,
+                          child: Container(
+                            color: Colors.transparent,
+                            width: double.infinity,
+                            height: double.infinity,
+                            child: Center(
+                              child: AnimatedOpacity(
+                                opacity: (vlcController!.value.isPlaying) ? 0.0 : 1.0,
+                                duration: Duration(milliseconds: 300),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.black26,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(
+                                    // Show replay icon if video has ended
+                                    vlcController!.value.isEnded 
+                                      ? Icons.replay 
+                                      : vlcController!.value.isPlaying 
+                                        ? Icons.pause 
+                                        : Icons.play_arrow,
+                                    color: Colors.white,
+                                    size: 60,
+                                  ),
+                                ),
+                              ),
                             ),
                           ),
+                        ),
                       ],
                     ),
                   ),
-                ),
-                VideoProgressIndicator(
-                  controller!,
-                  allowScrubbing: true,
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                ),
-                ValueListenableBuilder(
-                  valueListenable: controller!,
-                  builder: (context, VideoPlayerValue value, child) {
-                    return Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                // ),
+                // Video Progress Bar
+                if (vlcController!.value.duration != null && 
+                    vlcController!.value.duration.inMilliseconds > 0) ...[
+                  Container(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    color: Colors.black54,
+                    child: Column(
                       children: [
-                        Text(
-                          '${value.position.inMinutes}:${(value.position.inSeconds % 60).toString().padLeft(2, '0')}',
+                        Slider(
+                          value: () {
+                            final position = vlcController!.value.position.inMilliseconds;
+                            final duration = vlcController!.value.duration.inMilliseconds;
+                            if (duration > 0 && position.isFinite) {
+                              return (position / duration).clamp(0.0, 1.0);
+                            }
+                            return 0.0;
+                          }(),
+                          onChanged: (value) => seekTo(value),
+                          activeColor: Colors.blue,
+                          inactiveColor: Colors.grey,
                         ),
-                        Text(
-                          '${value.duration.inMinutes}:${(value.duration.inSeconds % 60).toString().padLeft(2, '0')}',
+                        // Time Display
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 16),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                '${vlcController!.value.position.inMinutes}:${(vlcController!.value.position.inSeconds % 60).toString().padLeft(2, '0')}',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                              Text(
+                                '${vlcController!.value.duration.inMinutes}:${(vlcController!.value.duration.inSeconds % 60).toString().padLeft(2, '0')}',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                            ],
+                          ),
                         ),
                       ],
-                    );
-                  },
-                ),
-                SizedBox(height: 10),
-                ElevatedButton(
-                  onPressed: _saveVideoToGallery,
-                  child: Text('Save Video to Gallery'),
-                ),
+                    ),
+                  ),
+                ],
               ]
-            ]
+            ],
+            // if (outputPath != null && !isCompressing && uploadedVideoId == null) ...[
+            //   SizedBox(height: 10),
+            //   Text('Compressed Size: ${compressedSize?.toStringAsFixed(2)} MB'),
+            //   if (compressionDuration != null) // Display compression time
+            //     Text(
+            //         'Compression Time: ${compressionDuration!.inSeconds} seconds'),
+            //   ElevatedButton(
+            //     onPressed: playVideo,
+            //     child: Text('Preview Compressed Video'),
+            //   ),
+            //   if (controller != null && controller!.value.isInitialized) ...[
+            //     GestureDetector(
+            //       onTap: () {
+            //         setState(() {
+            //           controller!.value.isPlaying
+            //               ? controller!.pause()
+            //               : controller!.play();
+            //         });
+            //       },
+            //       child: AspectRatio(
+            //         aspectRatio: controller!.value.aspectRatio,
+            //         child: Stack(
+            //           alignment: Alignment.center,
+            //           children: [
+            //             VideoPlayer(controller!),
+            //             if (!controller!.value.isPlaying)
+            //               Container(
+            //                 decoration: BoxDecoration(
+            //                   color: Colors.black26,
+            //                   shape: BoxShape.circle,
+            //                 ),
+            //                 child: Icon(
+            //                   Icons.play_arrow,
+            //                   color: Colors.white,
+            //                   size: 50,
+            //                 ),
+            //               ),
+            //           ],
+            //         ),
+            //       ),
+            //     ),
+            //     VideoProgressIndicator(
+            //       controller!,
+            //       allowScrubbing: true,
+            //       padding: EdgeInsets.symmetric(vertical: 8),
+            //     ),
+            //     ValueListenableBuilder(
+            //       valueListenable: controller!,
+            //       builder: (context, VideoPlayerValue value, child) {
+            //         return Row(
+            //           mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            //           children: [
+            //             Text(
+            //               '${value.position.inMinutes}:${(value.position.inSeconds % 60).toString().padLeft(2, '0')}',
+            //             ),
+            //             Text(
+            //               '${value.duration.inMinutes}:${(value.duration.inSeconds % 60).toString().padLeft(2, '0')}',
+            //             ),
+            //           ],
+            //         );
+            //       },
+            //     ),
+            //     SizedBox(height: 10),
+            //   ]
+            // ]
           ],
         ),
       ),
