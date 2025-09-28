@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_compress/video_compress.dart';
-import 'package:gallery_saver_plus/gallery_saver.dart';
+import 'package:image_gallery_saver/image_gallery_saver.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 void main() {
@@ -37,8 +37,10 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
   bool isCompressing = false;
 
   // Compression Settings - Customize here
-  VideoQuality _selectedQuality = VideoQuality.Res640x480Quality; // Default to Medium
-  int _targetFrameRate = 24; // You can adjust this for more compression (e.g., 15, 20, 24, 30)
+  VideoQuality _selectedQuality =
+      VideoQuality.Res640x480Quality; // Default to Medium
+  int _targetFrameRate =
+      24; // You can adjust this for more compression (e.g., 15, 20, 24, 30)
 
   Future<void> pickVideo() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.video);
@@ -89,14 +91,16 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
         setState(() {
           isCompressing = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Compression Failed')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Compression Failed')));
       }
     } catch (e) {
       stopwatch.stop(); // Ensure stopwatch stops even on error
       setState(() {
         isCompressing = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error during compression: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error during compression: $e')));
     }
   }
 
@@ -113,35 +117,37 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
 
   Future<void> _saveVideoToGallery() async {
     if (outputPath == null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No compressed video to save.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No compressed video to save.')));
       return;
     }
 
-    // Request storage permission
-    // For Android 10 (API 29) and above, WRITE_EXTERNAL_STORAGE is deprecated.
-    // gallery_saver_plus uses MediaStore for newer Android versions.
-    // For older Android versions, or if you need broader access, Permission.storage is still relevant.
-    // For iOS, NSPhotoLibraryAddUsageDescription and NSPhotoLibraryUsageDescription are needed in Info.plist.
-    PermissionStatus status = await Permission.photos.request(); // Request photos permission for modern Android/iOS
+    PermissionStatus status = await Permission.photos.request();
 
     if (status.isGranted) {
       try {
-        bool? success = await GallerySaver.saveVideo(outputPath!, albumName: "Compressed Videos");
-        if (success == true) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Video saved to gallery!')));
+        final result = await ImageGallerySaver.saveFile(outputPath!);
+        if (result != null && result['isSuccess'] == true) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('Video saved to gallery!')));
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save video to gallery.')));
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Failed to save video to gallery.')));
         }
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error saving video: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Error saving video: $e')));
       }
     } else if (status.isDenied) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Permission denied. Please grant access to save video.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text('Permission denied. Please grant access to save video.')));
     } else if (status.isPermanentlyDenied) {
       // User has permanently denied, guide them to app settings
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Storage permission permanently denied. Please enable it in app settings.'),
+          content: Text(
+              'Storage permission permanently denied. Please enable it in app settings.'),
           action: SnackBarAction(
             label: 'Settings',
             onPressed: () {
@@ -151,7 +157,8 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
         ),
       );
     } else if (status.isRestricted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Storage permission restricted.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Storage permission restricted.')));
     }
   }
 
@@ -188,7 +195,8 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
                     });
                   }
                 },
-                items: VideoQuality.values.map<DropdownMenuItem<VideoQuality>>((VideoQuality quality) {
+                items: VideoQuality.values.map<DropdownMenuItem<VideoQuality>>(
+                    (VideoQuality quality) {
                   return DropdownMenuItem<VideoQuality>(
                     value: quality,
                     child: Text(quality.toString().split('.').last),
@@ -223,15 +231,63 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
               SizedBox(height: 10),
               Text('Compressed Size: ${compressedSize?.toStringAsFixed(2)} MB'),
               if (compressionDuration != null) // Display compression time
-                Text('Compression Time: ${compressionDuration!.inSeconds} seconds'),
+                Text(
+                    'Compression Time: ${compressionDuration!.inSeconds} seconds'),
               ElevatedButton(
                 onPressed: playVideo,
                 child: Text('Preview Compressed Video'),
               ),
               if (controller != null && controller!.value.isInitialized) ...[
-                AspectRatio(
-                  aspectRatio: controller!.value.aspectRatio,
-                  child: VideoPlayer(controller!),
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      controller!.value.isPlaying
+                          ? controller!.pause()
+                          : controller!.play();
+                    });
+                  },
+                  child: AspectRatio(
+                    aspectRatio: controller!.value.aspectRatio,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        VideoPlayer(controller!),
+                        if (!controller!.value.isPlaying)
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.black26,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.play_arrow,
+                              color: Colors.white,
+                              size: 50,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                VideoProgressIndicator(
+                  controller!,
+                  allowScrubbing: true,
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                ),
+                ValueListenableBuilder(
+                  valueListenable: controller!,
+                  builder: (context, VideoPlayerValue value, child) {
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          '${value.position.inMinutes}:${(value.position.inSeconds % 60).toString().padLeft(2, '0')}',
+                        ),
+                        Text(
+                          '${value.duration.inMinutes}:${(value.duration.inSeconds % 60).toString().padLeft(2, '0')}',
+                        ),
+                      ],
+                    );
+                  },
                 ),
                 SizedBox(height: 10),
                 ElevatedButton(
