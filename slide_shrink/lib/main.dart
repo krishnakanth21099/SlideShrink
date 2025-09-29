@@ -95,7 +95,7 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
           compressionDuration = stopwatch.elapsed; // Store elapsed time
           isCompressing = false;
         });
-        playVideo();
+        // playVideo();
         uploadVideo(); // Upload to server after compression
       } else {
         setState(() {
@@ -268,7 +268,7 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
         vlcController?.dispose();
         vlcController = VlcPlayerController.network(
           hlsUrl!,
-          hwAcc: HwAcc.full,
+          hwAcc: HwAcc.auto,
           autoPlay: false,
           options: VlcPlayerOptions(),
         )..addListener(() {
@@ -389,6 +389,7 @@ class _VideoCompressorPageState extends State<VideoCompressorPage> {
               if (hlsUrl != null) ...[
                 SizedBox(height: 10),
                 Text('HLS URL: $hlsUrl'),
+                Text('Compressed Size: ${compressedSize?.toStringAsFixed(2)} MB'),
                 ElevatedButton(
                   onPressed: playHlsVideo,
                   child: Text('Stream Video (HLS)'),
